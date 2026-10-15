@@ -347,6 +347,57 @@ elif page == "Performance & Discounts":
         st.caption("Rule-based recommendations only. Discounts are not automatically applied; expired stock must be removed from sale.")
         st.download_button("Download discount recommendations CSV", discounts.to_csv(index=False).encode("utf-8-sig"), "freshroute_discount_recommendations.csv", "text/csv")
 
+        st.markdown("### Discount Optimization under Demand Uncertainty")
+        st.write("Compare tested markdown levels for each unexpired residual batch. The model uses explicit demand-response assumptions and low/base/high demand scenarios; it is a decision-support scenario model, not a trained demand forecast.")
+        opt_c1, opt_c2, opt_c3 = st.columns(3)
+        with opt_c1:
+            base_sell_through_pct = st.slider("Base expected sell-through (%)", min_value=10, max_value=100, value=50, step=5, key="discount_base_sellthrough")
+        with opt_c2:
+            elasticity = st.slider("Discount demand-response factor", min_value=0.0, max_value=4.0, value=1.5, step=0.25, key="discount_elasticity", help="Assumption: each 1% markdown increases sell-through relative to the base rate according to this factor.")
+        with opt_c3:
+            demand_uncertainty_pct = st.slider("Demand uncertainty range (±%)", min_value=0, max_value=50, value=20, step=5, key="discount_uncertainty")
+        st.caption("Tested markdowns: 0%, 10%, 20%, 30%, 40%, 50%. The objective estimates revenue minus the acquisition cost of all residual stock, plus handling cost on sold units; transport cost is excluded because it is not allocated to residual batches. Low/base/high scenarios are equally weighted.")
+        if st.button("Optimize Discount Options", type="primary", key="run_discount_optimization"):
+            try:
+                from discount_optimizer import optimize_discounts
+                optimized_discounts, discount_scenarios = optimize_discounts(
+                    raw_data, discount_plan,
+                    base_sell_through=base_sell_through_pct / 100.0,
+                    price_elasticity=float(elasticity),
+                    demand_uncertainty=demand_uncertainty_pct / 100.0,
+                )
+                st.session_state["discount_optimization_recommendations"] = optimized_discounts
+                st.session_state["discount_optimization_scenarios"] = discount_scenarios
+                st.session_state["discount_optimization_assumptions"] = {
+                    "base_sell_through_pct": base_sell_through_pct,
+                    "elasticity": elasticity,
+                    "demand_uncertainty_pct": demand_uncertainty_pct,
+                }
+            except Exception as exc:
+                st.error(f"Discount optimization could not be completed: {exc}")
+        optimized_discounts = st.session_state.get("discount_optimization_recommendations")
+        discount_scenarios = st.session_state.get("discount_optimization_scenarios")
+        if isinstance(optimized_discounts, pd.DataFrame):
+            if optimized_discounts.empty:
+                st.info("No residual batches were available to evaluate.")
+            else:
+                show_table(optimized_discounts, height=340)
+                st.download_button("Download optimized discount recommendations", optimized_discounts.to_csv(index=False).encode("utf-8-sig"), "freshroute_discount_optimization.csv", "text/csv", key="download_discount_optimization")
+                if isinstance(discount_scenarios, pd.DataFrame) and not discount_scenarios.empty:
+                    st.markdown("#### Discount scenario comparison")
+                    selected_batch = st.selectbox("Batch to inspect", sorted(discount_scenarios["batch_id"].astype(str).unique()), key="discount_scenario_batch")
+                    batch_scenarios = discount_scenarios[discount_scenarios["batch_id"].astype(str) == selected_batch].copy()
+                    comparison = batch_scenarios.groupby(["discount_pct", "demand_scenario"], as_index=False).agg(
+                        Estimated_contribution_INR=("estimated_contribution_inr", "sum"),
+                        Expected_sales_kg=("expected_sales_kg", "sum"),
+                        Estimated_revenue_INR=("estimated_revenue_inr", "sum"),
+                    )
+                    st.plotly_chart(px.line(comparison, x="discount_pct", y="Estimated_contribution_INR", color="demand_scenario", markers=True, title=f"Estimated contribution by discount — {selected_batch}", labels={"discount_pct":"Discount (%)","Estimated_contribution_INR":"Estimated contribution (INR)","demand_scenario":"Demand scenario"}), use_container_width=True)
+                    st.download_button("Download all discount scenarios", discount_scenarios.to_csv(index=False).encode("utf-8-sig"), "freshroute_discount_scenarios.csv", "text/csv", key="download_discount_scenarios")
+                st.caption("Recommendations are optimal only among the tested discount levels and under the selected assumptions. Validate the demand response with historical sales before using this as a real pricing decision. Expired stock is never recommended for sale.")
+        else:
+            st.info("Adjust the assumptions and click **Optimize Discount Options** to compare markdown scenarios.")
+
         st.markdown("### Economic interpretation")
         st.caption("Net contribution = eligible revenue − purchase cost − handling cost − estimated transport cost. The projected no-future-demand measure additionally subtracts the write-off value of all residual stock. It is a scenario, not a measured financial outcome.")
         if delta>0: st.success("FreshRoute has higher modelled net contribution than the FEFO comparator under these assumptions.")
