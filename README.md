@@ -1,44 +1,32 @@
-# FreshRoute — Streamlit Decision Support App (V12-aligned)
+# FreshRoute Streamlit App
 
-This project combines the strongest reusable parts of the supplied Streamlit GUI (navigation, KPI cards, charts, source tables, downloadable outputs) with the final FreshRoute notebook's V10/V12 evaluation approach.
-
-## Features
-- Operations overview: demand, inventory, fruit-level charts.
-- Data & Quality: inspect all nine source tables and validate core input fields.
-- Distribution Planner: generate a feasible FEFO comparator and a FreshRoute heuristic plan under the same hard constraints.
-- KPI & Validation: economic metrics, plan audits, residual-expiry claim gate, and supplied-dispatch-plan diagnostic.
-- Expiry & Markdown: residual inventory and explicitly hypothetical markdown scenarios.
-- About & Downloads: download source workbooks and supplied historical output workbooks.
-- CSV download buttons for trip schedules, order fulfilment, allocations, audits and markdown scenario.
+A Streamlit decision-support prototype for perishable-produce distribution.
 
 ## Run locally
-1. Install Python 3.10+.
-2. Extract this folder.
-3. Open a terminal in this folder.
-4. Install dependencies: `pip install -r requirements.txt`
-5. Start the app: `streamlit run app.py`
 
-## Deploy to GitHub / Streamlit Community Cloud
-1. Upload the contents of this folder to a GitHub repository (keep `app.py`, `optimizer.py`, `data_loader.py`, `requirements.txt`, `data/`, and optionally `output_reference/`).
-2. In Streamlit Community Cloud, select the repository and set the main file path to `app.py` (or `FreshRoute_Streamlit/app.py` if you upload the parent directory instead).
-3. Deploy. The app reads the Excel files from the included `data/` folder, so no Google Drive or Colab mount is needed.
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
 
-## Model alignment and limitations
-- The planning approach follows the notebook's final V12 framing: a feasible FEFO comparator, a FreshRoute service-and-economics heuristic, shared feasibility constraints, plan-based expiry estimates, projected no-future-demand write-off, and separate hypothetical markdown scenarios.
-- The supplied dispatch plan is a diagnostic reference, not a fair comparator unless independently validated.
-- The planner is a greedy heuristic, not a globally optimal solver.
-- The model uses the vehicle's supplied `transport_cost_per_km_inr` rate multiplied by route distance for estimated trip transport cost, as in the notebook's V10 comparison logic. Verify that the source rate unit is intended to be INR per km per trip.
-- Refrigeration is enforced only when storage text explicitly requires it. The data does not provide exact temperature ranges.
-- `Projected_spoilage_no_future_demand_kg` assumes no future orders/sales and residual stock remains unsold until expiry. It is a scenario, not observed spoilage.
-- Discount uptake and markdown revenue are hypothetical and excluded from the primary KPI.
-- The notebook's output workbooks are stored under `output_reference/` for traceability only; the app does not treat them as freshly regenerated results.
+## Pages
 
-## Source files
-The nine Excel workbooks in `data/` are the latest supplied input files. Files in `output_reference/` are the supplied historical output workbooks and are not overwritten.
+- **Overview** — demand, inventory and fruit-level charts.
+- **Inventory & Expiry** — batch-level stock and expiry review, plus residual inventory and hypothetical markdown scenarios.
+- **Distribution Planner** — friend-version workflow retained and expanded: run planner, dispatch schedule, order fulfilment, unfulfilled-order diagnostics, remaining stock, batch allocations and feasibility audit. It compares FreshRoute with a common-rule FEFO comparator.
+- **Performance & Discounts** — KPI cards, KPI summary, on-time/pre-expiry eligibility chart, baseline comparison, discount recommendations, economic interpretation, spoilage claim gate, and audits.
+- **Data & Quality** — inspect the nine source workbooks and run input-quality checks.
+- **About & Downloads** — model assumptions, limitations and source/reference downloads.
 
+## Data
 
-## Updated navigation and theme
-- Rectangle sidebar navigation: Overview, Inventory & Expiry, Distribution Planner, Performance & Discounts, Data & Quality, About & Downloads.
-- Inventory & Expiry combines batch/shelf-life inspection with residual inventory and hypothetical markdown scenarios.
-- Performance & Discounts combines V12-aligned FEFO/FreshRoute KPI comparison, validation audits, economics, delivery eligibility, and the friend's rule-based discount recommendations.
-- KPI metric cards use a light surface and dark green text to remain readable when the Streamlit app is viewed in dark mode.
+Place the nine source Excel files in `data/`: `suppliers.xlsx`, `vehicles.xlsx`, `dispatch_plan.xlsx`, `fruits.xlsx`, `inventory_batches.xlsx`, `transport_routes.xlsx`, `customers.xlsx`, `customer_orders.xlsx`, and `suppliers_products.xlsx`.
+
+## Important interpretation notes
+
+- The planning algorithm is a greedy heuristic, not a proof of global optimality.
+- FEFO is a model-generated comparator under the same implemented feasibility rules; the supplied dispatch plan is retained as a separate diagnostic reference.
+- Late deliveries are optional. When enabled, late allocations remain visible but are not counted as on-time/pre-expiry fulfilment or eligible revenue in the primary evaluation.
+- Markdown revenue is hypothetical and is not included in primary KPIs.
+- A reduction in modelled residual stock is not proof of real-world spoilage prevented.
+- Confirm that cost units and source data are appropriate before using the results for operational decisions.

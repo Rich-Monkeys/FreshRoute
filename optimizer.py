@@ -48,7 +48,7 @@ def prepare_data(data):
     d["customer_orders"] = orders
     return d
 
-def build_plan(data, strategy="fresh", delay_hours=0.0, demand_multiplier=1.0, expiry_shift_hours=0.0, price_multiplier=1.0):
+def build_plan(data, strategy="fresh", delay_hours=0.0, demand_multiplier=1.0, expiry_shift_hours=0.0, price_multiplier=1.0, allow_late=False):
     """Run the same-feasibility heuristic for either 'fefo' or 'fresh' strategy."""
     d = prepare_data(data)
     orders = d["customer_orders"].copy()
@@ -80,7 +80,7 @@ def build_plan(data, strategy="fresh", delay_hours=0.0, demand_multiplier=1.0, e
         route_groups.setdefault(key, []).append(r)
     trips, allocations = [], []
     horizon = orders["required_delivery_date"].max()
-    max_iterations = max(1, len(orders) * max(len(vehicles),1) * 8)
+    max_iterations = max(1, len(orders))  # bounded runtime for interactive use
     for _ in range(max_iterations):
         options = []
         for oid, rem in remaining_demand.items():
@@ -113,7 +113,7 @@ def build_plan(data, strategy="fresh", delay_hours=0.0, demand_multiplier=1.0, e
                     handling = max(0.0, float(available["handling_time_hour"].fillna(0).max()))
                     depart = max(order["order_date"], start_time, vehicle_ready.get(vid,start_time))
                     arrival = depart + pd.Timedelta(hours=handling+travel)
-                    if arrival > order["required_delivery_date"]: continue
+                    if arrival > order["required_delivery_date"] and not allow_late: continue
                     eligible = available[available["expiry_date"] >= arrival]
                     eligible_kg = float(eligible["remaining_kg"].sum())
                     qty = min(float(rem), float(cap), eligible_kg)
@@ -175,7 +175,7 @@ def build_plan(data, strategy="fresh", delay_hours=0.0, demand_multiplier=1.0, e
     order_summary=pd.DataFrame(summary)
     return alloc_df,trips_df,orders,pd.Series(stock,dtype=float),remaining_demand
 
-def evaluate_plan(data, allocations, trips, orders, remaining_stock, remaining_demand, strategy):
+def evaluate_plan(data, allocations, trips, orders, remaining_stock, remaining_demand, strategy, allow_late=False):
     """V12-style primary and projected no-future-demand KPIs; scenarios remain separate."""
     d=prepare_data(data); batches=d["inventory_batches"].copy()
     horizon=orders["required_delivery_date"].max()
@@ -220,10 +220,10 @@ def evaluate_plan(data, allocations, trips, orders, remaining_stock, remaining_d
         "Projected_spoilage_no_future_demand_kg":projected_spoilage,
         "Projected_writeoff_no_future_demand_INR":projected_writeoff,
         "Net_contribution_projected_no_future_demand_INR":projected_net,
-        "Trips":int(len(trips)),"Constraint_failures":int((audit_plan(data,allocations,trips,orders,remaining_stock)["Status"]!="PASS").sum())
+        "Trips":int(len(trips)),"Constraint_failures":int((audit_plan(data,allocations,trips,orders,remaining_stock,allow_late=allow_late)["Status"]!="PASS").sum())
     }
 
-def audit_plan(data, allocations, trips, orders, remaining_stock):
+def audit_plan(data, allocations, trips, orders, remaining_stock, allow_late=False):
     d=prepare_data(data); batches=d["inventory_batches"]; vehicles=d["vehicles"]; routes=d["transport_routes"]
     checks=[]
     def add(name,passed,evidence): checks.append({"Check":name,"Status":"PASS" if bool(passed) else "FAIL","Evidence":str(evidence)})
@@ -244,7 +244,7 @@ def audit_plan(data, allocations, trips, orders, remaining_stock):
         expiry_ok=bool((pd.to_datetime(aa["arrival_datetime"])<=pd.to_datetime(aa["expiry_date"])).all())
     add("Arrival is before batch expiry",expiry_ok,"Allocation-level arrival vs batch expiry")
     deadline_ok=trips.empty or bool((pd.to_datetime(trips["arrival_datetime"])<=pd.to_datetime(trips["required_delivery_date"])).all())
-    add("All planned trips meet delivery deadlines",deadline_ok,"Hard-deadline planner; late deliveries are not silently accepted")
+    add("All planned trips meet delivery deadlines", deadline_ok or allow_late, "Late arrivals are permitted by the selected planner option" if allow_late else "Hard-deadline planner; late deliveries are not silently accepted")
     # Vehicle availability/overlap
     overlap=True
     if not trips.empty:

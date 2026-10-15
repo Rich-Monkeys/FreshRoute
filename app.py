@@ -127,52 +127,91 @@ elif page == "Data & Quality":
         st.caption("These checks do not prove that every source field is correct or that the dataset is representative of real operations.")
 
 elif page == "Distribution Planner":
-    st.subheader("Distribution planner")
-    st.write("Compare two plans under the same hard constraints: a feasible FEFO comparator and FreshRoute's service-and-economics heuristic.")
-    with st.expander("Planning assumptions",expanded=False):
-        st.markdown("- Allocations cannot exceed order demand or batch inventory.\n- A trip cannot exceed vehicle capacity.\n- Refrigeration is required when the fruit's storage requirement explicitly says `refrigerated` (unless the text says `or`).\n- Arrival must be before both the order deadline and batch expiry.\n- Each vehicle has a 0.5-hour turnaround allowance after arrival.\n- The planner uses route distance and the vehicle's supplied cost-per-km rate for estimated trip transport cost.")
-    if st.button("Run both plans",type="primary",use_container_width=False):
-        with st.spinner("Scheduling feasible trips and calculating evaluation metrics..."):
-            results={}
-            for strategy,label in [("fefo","Feasible FEFO baseline"),("fresh","FreshRoute")]:
-                alloc,trips,plan_orders,remaining,remaining_demand=build_plan(raw_data,strategy=strategy)
-                metrics=evaluate_plan(raw_data,alloc,trips,plan_orders,remaining,remaining_demand,label)
-                audit=audit_plan(raw_data,alloc,trips,plan_orders,remaining)
-                results[strategy]={"alloc":alloc,"trips":trips,"orders":plan_orders,"remaining":remaining,"remaining_demand":remaining_demand,"metrics":metrics,"audit":audit}
-            st.session_state["freshroute_results"]=results
-    results=st.session_state.get("freshroute_results")
+    st.subheader("Distribution Planner")
+    st.write("Build dispatch schedules, inspect fulfilment, diagnose unmet demand, and compare FreshRoute with a common-feasibility FEFO baseline.")
+    with st.expander("Planning assumptions", expanded=False):
+        st.markdown("- Allocations cannot exceed order demand or batch inventory.\n- Each trip respects vehicle capacity and storage compatibility.\n- Arrivals must be before batch expiry.\n- Vehicles have a turnaround allowance between trips.\n- Transport cost uses route distance × vehicle cost-per-km rate.\n- If late deliveries are enabled, late allocations are shown separately and do not count as on-time/pre-expiry fulfilment revenue in the primary KPI.")
+    allow_late = st.toggle("Allow late deliveries when feasible", value=False, help="When enabled, the planner may allocate stock to orders even if arrival is after the requested delivery deadline. Late allocations remain labelled as late and are excluded from eligible on-time revenue.")
+    if st.button("Run Distribution Planner", type="primary"):
+        with st.spinner("Generating FreshRoute and FEFO plans and validating constraints..."):
+            results = {}
+            for strategy, label in [("fefo", "Feasible FEFO baseline"), ("fresh", "FreshRoute")]:
+                alloc, trips, plan_orders, remaining, remaining_demand = build_plan(raw_data, strategy=strategy, allow_late=allow_late)
+                metrics = evaluate_plan(raw_data, alloc, trips, plan_orders, remaining, remaining_demand, label, allow_late=allow_late)
+                audit = audit_plan(raw_data, alloc, trips, plan_orders, remaining, allow_late=allow_late)
+                results[strategy] = {"alloc": alloc, "trips": trips, "orders": plan_orders, "remaining": remaining, "remaining_demand": remaining_demand, "metrics": metrics, "audit": audit}
+            st.session_state["freshroute_results"] = results
+            st.session_state["freshroute_allow_late"] = allow_late
+    results = st.session_state.get("freshroute_results")
     if not results:
-        st.info("Select **Run both plans** to generate a fresh plan from the current source data.")
+        st.info("Click **Run Distribution Planner** to generate a new plan from the current source data.")
     else:
-        selected_plan=st.radio("View plan",["FreshRoute","Feasible FEFO baseline"],horizontal=True)
-        key="fresh" if selected_plan=="FreshRoute" else "fefo"
-        r=results[key]; m=r["metrics"]
-        c1,c2,c3,c4=st.columns(4)
-        c1.metric("Demand fulfilled",f"{m['Demand_fulfilment_pct']:.1f}%")
-        c2.metric("On-time & pre-expiry",f"{m['On_time_pre_expiry_kg']:,.0f} kg")
-        c3.metric("Trips",f"{m['Trips']:,}")
-        c4.metric("Unmet demand",f"{m['Unmet_demand_kg']:,.0f} kg")
-        tab1,tab2,tab3=st.tabs(["Trip schedule","Order fulfilment","Batch allocations"])
+        selected_plan = st.radio("View plan", ["FreshRoute", "Feasible FEFO baseline"], horizontal=True)
+        key = "fresh" if selected_plan == "FreshRoute" else "fefo"
+        r = results[key]
+        m = r["metrics"]
+        st.success(f"Plan generated: {m['Allocated_kg']:,.0f} kg allocated across {m['Trips']:,} trip records.")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Demand fulfilled", f"{m['Demand_fulfilment_pct']:.1f}%")
+        c2.metric("On-time & pre-expiry", f"{m['On_time_pre_expiry_kg']:,.0f} kg")
+        c3.metric("Trips", f"{m['Trips']:,}")
+        c4.metric("Unmet demand", f"{m['Unmet_demand_kg']:,.0f} kg")
+        tab1, tab2, tab3, tab4 = st.tabs(["Dispatch Schedule", "Order Fulfilment", "Unfulfilled Diagnostics", "Remaining Stock / Allocations"])
         with tab1:
-            show_table(r["trips"].sort_values(["dispatch_datetime","vehicle_id"]) if not r["trips"].empty else r["trips"],height=390)
-            if not r["trips"].empty:
-                st.download_button("Download trip schedule CSV",r["trips"].to_csv(index=False).encode("utf-8-sig"),f"{key}_trip_schedule.csv","text/csv",key=f"{key}_trips_dl")
+            st.markdown("### Dispatch Schedule")
+            trips_view = r["trips"].sort_values(["dispatch_datetime", "vehicle_id"]) if not r["trips"].empty else r["trips"]
+            show_table(trips_view, height=390)
+            if not trips_view.empty:
+                st.download_button("Download Dispatch Plan", trips_view.to_csv(index=False).encode("utf-8-sig"), f"{key}_dispatch_plan.csv", "text/csv", key=f"{key}_dispatch_dl")
         with tab2:
-            alloc_by_order=r["alloc"].groupby("order_id",as_index=False)["qty_kg"].sum() if not r["alloc"].empty else pd.DataFrame(columns=["order_id","qty_kg"])
-            fulfil=r["orders"][["order_id","customer_id","destination","fruit_type","quantity_requested_kg"]].merge(alloc_by_order,left_on="order_id",right_on="order_id",how="left")
-            fulfil["qty_kg"]=fulfil["qty_kg"].fillna(0)
-            fulfil["unfulfilled_kg"]=(fulfil["quantity_requested_kg"]-fulfil["qty_kg"]).clip(lower=0)
-            fulfil["status"]=fulfil.apply(lambda x:"Fulfilled" if x["unfulfilled_kg"]<=1e-6 else ("Partially fulfilled" if x["qty_kg"]>1e-6 else "Unfulfilled"),axis=1)
-            show_table(fulfil,height=390)
-            st.download_button("Download order fulfilment CSV",fulfil.to_csv(index=False).encode("utf-8-sig"),f"{key}_order_fulfilment.csv","text/csv",key=f"{key}_orders_dl")
+            st.markdown("### Order Fulfilment")
+            alloc_by_order = r["alloc"].groupby("order_id", as_index=False)["qty_kg"].sum() if not r["alloc"].empty else pd.DataFrame(columns=["order_id", "qty_kg"])
+            fulfil = r["orders"][["order_id", "customer_id", "destination", "fruit_type", "quantity_requested_kg"]].merge(alloc_by_order, on="order_id", how="left")
+            fulfil["qty_kg"] = fulfil["qty_kg"].fillna(0)
+            fulfil["unfulfilled_kg"] = (fulfil["quantity_requested_kg"] - fulfil["qty_kg"]).clip(lower=0)
+            fulfil["status"] = fulfil.apply(lambda x: "Fulfilled" if x["unfulfilled_kg"] <= 1e-6 else ("Partially fulfilled" if x["qty_kg"] > 1e-6 else "Unfulfilled"), axis=1)
+            show_table(fulfil, height=390)
+            st.download_button("Download Order Fulfilment", fulfil.to_csv(index=False).encode("utf-8-sig"), f"{key}_order_fulfilment.csv", "text/csv", key=f"{key}_fulfil_dl")
         with tab3:
-            show_table(r["alloc"],height=390)
-            st.download_button("Download batch allocations CSV",r["alloc"].to_csv(index=False).encode("utf-8-sig"),f"{key}_allocations.csv","text/csv",key=f"{key}_alloc_dl")
-        st.markdown("### Feasibility audit")
-        show_table(r["audit"])
-        fails=r["audit"][r["audit"]["Status"]!="PASS"]
-        if fails.empty: st.success("No failures detected by the implemented hard-constraint audit.")
-        else: st.error(f"{len(fails)} validation check(s) failed. Review the evidence before making performance claims.")
+            st.markdown("### Unfulfilled Orders Diagnostic")
+            st.caption("Suggested causes are diagnostic leads, not guaranteed root causes.")
+            diagnostic = fulfil[fulfil["unfulfilled_kg"] > 1e-6].copy()
+            if diagnostic.empty:
+                st.success("All orders are fulfilled under this plan.")
+            else:
+                route_destinations = set(raw_data["transport_routes"]["destination"].dropna().astype(str).str.strip().str.casefold())
+                stock_by_fruit = batches.assign(quantity_kg=pd.to_numeric(batches["quantity_kg"], errors="coerce").fillna(0)).merge(data["fruits"][["fruit_id", "fruit_name"]], on="fruit_id", how="left").groupby("fruit_id")["quantity_kg"].sum().to_dict()
+                order_fruit = r["orders"][["order_id", "fruit_id"]].drop_duplicates("order_id")
+                diagnostic = diagnostic.merge(order_fruit, on="order_id", how="left")
+                def diagnose(row):
+                    if str(row.get("destination", "")).strip().casefold() not in route_destinations:
+                        return "No matching destination route found"
+                    fruit_stock = float(stock_by_fruit.get(row.get("fruit_id"), 0))
+                    if fruit_stock < float(row.get("quantity_requested_kg", 0)):
+                        return "Possible fruit-stock shortage; inspect batch-level remaining stock"
+                    return "Check delivery deadline, batch expiry, vehicle capacity and storage compatibility"
+                diagnostic["possible_cause"] = diagnostic.apply(diagnose, axis=1)
+                d1, d2 = st.columns(2)
+                d1.metric("Orders with unmet demand", f"{len(diagnostic):,}")
+                d2.metric("Total unfulfilled demand", f"{diagnostic['unfulfilled_kg'].sum():,.0f} kg")
+                show_table(diagnostic[["order_id", "destination", "quantity_requested_kg", "qty_kg", "unfulfilled_kg", "status", "possible_cause"]], height=390)
+                st.download_button("Download Unfulfilled Diagnostics", diagnostic.to_csv(index=False).encode("utf-8-sig"), f"{key}_unfulfilled_diagnostics.csv", "text/csv", key=f"{key}_diagnostics_dl")
+        with tab4:
+            st.markdown("### Remaining Stock")
+            remaining_frame = r["remaining"].rename("remaining_kg").rename_axis("batch_id").reset_index()
+            show_table(remaining_frame, height=300)
+            st.download_button("Download Remaining Stock", remaining_frame.to_csv(index=False).encode("utf-8-sig"), f"{key}_remaining_stock.csv", "text/csv", key=f"{key}_remaining_dl")
+            st.markdown("### Batch Allocations")
+            show_table(r["alloc"], height=300)
+            if not r["alloc"].empty:
+                st.download_button("Download Batch Allocations", r["alloc"].to_csv(index=False).encode("utf-8-sig"), f"{key}_batch_allocations.csv", "text/csv", key=f"{key}_alloc_dl")
+        st.markdown("### Feasibility Audit")
+        show_table(r["audit"], height=250)
+        fails = r["audit"][r["audit"]["Status"] != "PASS"]
+        if fails.empty:
+            st.success("No failures detected by the implemented audit checks.")
+        else:
+            st.warning(f"{len(fails)} audit check(s) need review. See the evidence before making performance claims.")
 
 elif page == "Performance & Discounts":
     st.subheader("KPI comparison & claim integrity")
@@ -188,8 +227,25 @@ elif page == "Performance & Discounts":
         cols[2].metric("FreshRoute net contribution",fmt_inr(fresh["Net_contribution_INR"]))
         delta=fresh["Net_contribution_INR"]-fefo["Net_contribution_INR"]
         cols[3].metric("Net contribution difference",fmt_inr(delta),delta=f"{delta:+,.2f} INR")
+        st.markdown("### FreshRoute KPI Summary")
+        current_metrics = fresh
+        summary_rows = [
+            ("Demand (kg)", current_metrics["Demand_kg"]),
+            ("Allocated (kg)", current_metrics["Allocated_kg"]),
+            ("Unfulfilled (kg)", current_metrics["Unmet_demand_kg"]),
+            ("Fulfilment rate (%)", current_metrics["Demand_fulfilment_pct"]),
+            ("On-time & pre-expiry (kg)", current_metrics["On_time_pre_expiry_kg"]),
+            ("Revenue (INR)", current_metrics["Revenue_INR"]),
+            ("Purchase cost (INR)", current_metrics["Purchase_cost_INR"]),
+            ("Handling cost (INR)", current_metrics["Handling_cost_INR"]),
+            ("Transport cost (INR)", current_metrics["Transport_cost_INR"]),
+            ("Net contribution (INR)", current_metrics["Net_contribution_INR"]),
+        ]
+        show_table(pd.DataFrame(summary_rows, columns=["Metric", "Value"]), height=300)
         display_cols=["Strategy","Demand_kg","Allocated_kg","Demand_fulfilment_pct","On_time_pre_expiry_kg","Unmet_demand_kg","Expired_by_order_horizon_kg","Residual_inventory_kg","Revenue_INR","Purchase_cost_INR","Handling_cost_INR","Transport_cost_INR","Residual_spoilage_writeoff_INR","Net_contribution_INR","Projected_writeoff_no_future_demand_INR","Net_contribution_projected_no_future_demand_INR","Constraint_failures"]
+        st.markdown("### Baseline vs FreshRoute")
         show_table(kpi[display_cols],height=310)
+        st.download_button("Download KPI Comparison", kpi[display_cols].to_csv(index=False).encode("utf-8-sig"), "freshroute_kpi_comparison.csv", "text/csv")
         st.markdown("### On-time vs late deliveries")
         on_time = float(fresh.get("On_time_pre_expiry_kg", 0))
         allocated = float(fresh.get("Allocated_kg", 0))
