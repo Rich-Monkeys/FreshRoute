@@ -35,3 +35,10 @@ This project combines the strongest reusable parts of the supplied Streamlit GUI
 
 ## Source files
 The nine Excel workbooks in `data/` are the latest supplied input files. Files in `output_reference/` are the supplied historical output workbooks and are not overwritten.
+
+
+## Updated navigation and theme
+- Rectangle sidebar navigation: Overview, Inventory & Expiry, Distribution Planner, Performance & Discounts, Data & Quality, About & Downloads.
+- Inventory & Expiry combines batch/shelf-life inspection with residual inventory and hypothetical markdown scenarios.
+- Performance & Discounts combines V12-aligned FEFO/FreshRoute KPI comparison, validation audits, economics, delivery eligibility, and the friend's rule-based discount recommendations.
+- KPI metric cards use a light surface and dark green text to remain readable when the Streamlit app is viewed in dark mode.

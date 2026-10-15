@@ -17,7 +17,18 @@ st.markdown("""
 .hero h1 {color:white;font-size:2.2rem;margin:0 0 .35rem 0;letter-spacing:-.03em;}
 .hero p {color:#e4f4ed;margin:0;font-size:1.02rem;}
 div[data-testid="stMetric"] {background:#f5faf7;border:1px solid #d9e9e0;padding:13px 15px;border-radius:13px;}
-div[data-testid="stMetricLabel"] p {color:#45675a;}
+div[data-testid="stMetric"] {background:#f5faf7 !important;color:#124734 !important;border:1px solid #cfe3d8 !important;}
+div[data-testid="stMetric"] label, div[data-testid="stMetric"] label p,
+div[data-testid="stMetricLabel"], div[data-testid="stMetricLabel"] p,
+div[data-testid="stMetricValue"], div[data-testid="stMetricValue"] div,
+div[data-testid="stMetricDelta"] {color:#124734 !important;}
+/* Keep KPI cards readable even when the app itself is in dark mode. */
+div[data-testid="stMetric"] * {color:#124734 !important;}
+/* Sidebar navigation uses full-width rectangular buttons. */
+section[data-testid="stSidebar"] div.stButton > button {width:100%; text-align:left; border-radius:7px; min-height:2.7rem; border:1px solid #cfe3d8; background:#f5faf7; color:#124734; font-weight:600;}
+section[data-testid="stSidebar"] div.stButton > button:hover {border-color:#176b55; color:#0e5a42; background:#e5f3eb;}
+section[data-testid="stSidebar"] div.stButton > button[kind="primary"] {background:#176b55 !important; color:#ffffff !important; border-color:#176b55 !important;}
+section[data-testid="stSidebar"] div.stButton > button[kind="primary"] * {color:#ffffff !important;}
 .stTabs [data-baseweb="tab-list"] {gap:8px;}
 .stTabs [data-baseweb="tab"] {border-radius:10px;padding:9px 15px;}
 .small-note {color:#60766c;font-size:.88rem;}
@@ -51,10 +62,13 @@ quality_issues = input_quality_issues(raw_data)
 with st.sidebar:
     st.markdown("## 🍃 FreshRoute")
     st.caption("Operations workspace")
-    page = st.radio("Navigate", ["Overview", "Data & Quality", "Distribution Planner", "KPI & Validation", "Expiry & Markdown", "About & Downloads"], label_visibility="collapsed")
-    st.divider()
-    st.caption("Version 12-aligned evaluation")
-    st.caption(f"{len(orders):,} orders · {len(batches):,} batches · {len(routes):,} routes")
+    nav_pages = ["Overview", "Inventory & Expiry", "Distribution Planner", "Performance & Discounts", "Data & Quality", "About & Downloads"]
+    if "freshroute_page" not in st.session_state:
+        st.session_state["freshroute_page"] = "Overview"
+    for nav_page in nav_pages:
+        if st.button(nav_page, key="nav_" + nav_page, type="primary" if st.session_state["freshroute_page"] == nav_page else "secondary", use_container_width=True):
+            st.session_state["freshroute_page"] = nav_page
+    page = st.session_state["freshroute_page"]
 
 def fmt_inr(x):
     return f"₹{float(x):,.2f}"
@@ -160,7 +174,7 @@ elif page == "Distribution Planner":
         if fails.empty: st.success("No failures detected by the implemented hard-constraint audit.")
         else: st.error(f"{len(fails)} validation check(s) failed. Review the evidence before making performance claims.")
 
-elif page == "KPI & Validation":
+elif page == "Performance & Discounts":
     st.subheader("KPI comparison & claim integrity")
     results=st.session_state.get("freshroute_results")
     if not results:
@@ -176,6 +190,19 @@ elif page == "KPI & Validation":
         cols[3].metric("Net contribution difference",fmt_inr(delta),delta=f"{delta:+,.2f} INR")
         display_cols=["Strategy","Demand_kg","Allocated_kg","Demand_fulfilment_pct","On_time_pre_expiry_kg","Unmet_demand_kg","Expired_by_order_horizon_kg","Residual_inventory_kg","Revenue_INR","Purchase_cost_INR","Handling_cost_INR","Transport_cost_INR","Residual_spoilage_writeoff_INR","Net_contribution_INR","Projected_writeoff_no_future_demand_INR","Net_contribution_projected_no_future_demand_INR","Constraint_failures"]
         show_table(kpi[display_cols],height=310)
+        st.markdown("### On-time vs late deliveries")
+        on_time = float(fresh.get("On_time_pre_expiry_kg", 0))
+        allocated = float(fresh.get("Allocated_kg", 0))
+        late_or_ineligible = max(0.0, allocated - on_time)
+        st.plotly_chart(px.pie(pd.DataFrame({"Delivery status": ["On-time & pre-expiry", "Late / not eligible"], "Quantity (kg)": [on_time, late_or_ineligible]}), names="Delivery status", values="Quantity (kg)", hole=0.55, title="Allocated quantity by delivery eligibility"), use_container_width=True)
+        st.markdown("### Discount recommendations")
+        from metrics_friend import build_discount_recommendations
+        discount_plan = results["fresh"]["remaining"]
+        discounts = build_discount_recommendations(raw_data, discount_plan)
+        show_table(discounts, height=330)
+        st.caption("Rule-based recommendations only. Discounts are not automatically applied; expired stock must be removed from sale.")
+        st.download_button("Download discount recommendations CSV", discounts.to_csv(index=False).encode("utf-8-sig"), "freshroute_discount_recommendations.csv", "text/csv")
+
         st.markdown("### Economic interpretation")
         st.caption("Net contribution = eligible revenue − purchase cost − handling cost − estimated transport cost. The projected no-future-demand measure additionally subtracts the write-off value of all residual stock. It is a scenario, not a measured financial outcome.")
         if delta>0: st.success("FreshRoute has higher modelled net contribution than the FEFO comparator under these assumptions.")
@@ -203,13 +230,32 @@ elif page == "KPI & Validation":
         show_table(baseline.head(30),height=300)
         st.download_button("Download supplied dispatch plan diagnostic CSV",baseline.to_csv(index=False).encode("utf-8-sig"),"supplied_dispatch_plan_diagnostic.csv","text/csv")
 
-elif page == "Expiry & Markdown":
-    st.subheader("Residual inventory & markdown opportunities")
+elif page == "Inventory & Expiry":
+    st.subheader("Inventory & Expiry")
+    st.write("Inspect inventory batches and shelf life, then review plan-based residual stock and hypothetical markdown opportunities.")
+    inventory_view = batches.merge(data["fruits"][["fruit_id", "fruit_name", "storage_requirement"]], on="fruit_id", how="left")
+    inventory_view["expiry_date"] = pd.to_datetime(inventory_view["expiry_date"], errors="coerce")
+    inventory_view["received_date"] = pd.to_datetime(inventory_view["received_date"], errors="coerce")
+    inventory_view["days_to_expiry"] = (inventory_view["expiry_date"].dt.normalize() - pd.Timestamp.today().normalize()).dt.days
+    fruit_options = sorted(inventory_view["fruit_name"].dropna().unique())
+    selected_fruits = st.multiselect("Filter inventory by fruit", fruit_options, key="inventory_fruit_filter")
+    if selected_fruits:
+        inventory_view = inventory_view[inventory_view["fruit_name"].isin(selected_fruits)]
+    inv1, inv2, inv3 = st.columns(3)
+    inv1.metric("Batches shown", f"{len(inventory_view):,}")
+    inv2.metric("Quantity shown", f"{inventory_view['quantity_kg'].sum():,.0f} kg")
+    inv3.metric("Expiring within 72 hours", f"{inventory_view.loc[inventory_view['days_to_expiry'].between(0, 3), 'quantity_kg'].sum():,.0f} kg")
+    st.dataframe(inventory_view.sort_values("expiry_date"), use_container_width=True, hide_index=True, height=320)
+    st.caption("Expiry dates are from the supplied dataset, not live sensor readings. Current-date expiry indicators are informational; plan-based analysis below uses the planner outputs.")
+    st.download_button("Download filtered inventory CSV", inventory_view.to_csv(index=False).encode("utf-8-sig"), "freshroute_inventory_expiry.csv", "text/csv")
+    st.divider()
+    st.subheader("Residual Inventory & Markdown")
     results=st.session_state.get("freshroute_results")
     if not results:
         st.info("Run both plans in Distribution Planner first.")
     else:
-        chosen=st.radio("Plan for residual-stock analysis",["FreshRoute","Feasible FEFO baseline"],horizontal=True)
+        st.markdown("### Residual inventory & markdown opportunities")
+        chosen=st.radio("Plan for residual-stock analysis",["FreshRoute","Feasible FEFO baseline"],horizontal=True, key="expiry_plan_choice")
         key="fresh" if chosen=="FreshRoute" else "fefo"
         remaining=results[key]["remaining"]
         uptake=st.slider("Hypothetical markdown uptake (%)",min_value=0,max_value=100,value=50,step=5)
