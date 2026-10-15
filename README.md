@@ -30,3 +30,4 @@ Place the nine source Excel files in `data/`: `suppliers.xlsx`, `vehicles.xlsx`,
 - Markdown revenue is hypothetical and is not included in primary KPIs.
 - A reduction in modelled residual stock is not proof of real-world spoilage prevented.
 - Confirm that cost units and source data are appropriate before using the results for operational decisions.
+- **Travel Time Uncertainty Analysis** — on the Distribution Planner page, add a selected uniform travel-time increase based on the average route travel time, rerun FreshRoute, and compare on-time fulfilment, unmet demand, transport cost, and audit failures against the original FreshRoute plan and original FEFO baseline. This is deterministic sensitivity analysis, not a statistical confidence interval or a probabilistic forecast.

@@ -213,6 +213,94 @@ elif page == "Distribution Planner":
         else:
             st.warning(f"{len(fails)} audit check(s) need review. See the evidence before making performance claims.")
 
+        st.markdown("### Travel Time Uncertainty Analysis")
+        st.write("Test how longer travel times may affect delivery feasibility, on-time fulfilment, and transport cost. This is a sensitivity scenario, not a probability forecast.")
+        max_increase_pct = st.slider(
+            "Maximum travel-time increase to test (%)", min_value=0, max_value=50,
+            value=20, step=5, key="travel_uncertainty_pct",
+            help="Applies a uniform extra delay based on the dataset's average route travel time. Individual route delays may differ in reality."
+        )
+        route_times = pd.to_numeric(raw_data["transport_routes"]["estimated_travel_time_hours"], errors="coerce").dropna()
+        avg_route_hours = float(route_times.clip(lower=0).mean()) if not route_times.empty else 0.0
+        st.caption(f"Average baseline route travel time in the input data: {avg_route_hours:.2f} hours. The scenario adds the same extra hours to each route, derived from this average.")
+        if st.button("Run Travel Time Sensitivity Analysis", type="secondary", key="run_travel_uncertainty"):
+            extra_hours = avg_route_hours * max_increase_pct / 100.0
+            allow_late_scenario = st.session_state.get("freshroute_allow_late", False)
+            with st.spinner("Replanning FreshRoute under the selected travel-time delay..."):
+                a_u, t_u, o_u, rem_u, dem_u = build_plan(
+                    raw_data, strategy="fresh", delay_hours=extra_hours,
+                    allow_late=allow_late_scenario
+                )
+                met_u = evaluate_plan(
+                    raw_data, a_u, t_u, o_u, rem_u, dem_u, "FreshRoute with delay",
+                    allow_late=allow_late_scenario
+                )
+                aud_u = audit_plan(
+                    raw_data, a_u, t_u, o_u, rem_u,
+                    allow_late=allow_late_scenario
+                )
+            base_fresh = results["fresh"]["metrics"]
+            base_fefo = results["fefo"]["metrics"]
+            rows = [
+                {
+                    "Plan / scenario": "FEFO baseline (original travel time)",
+                    "Travel-time increase (%)": 0,
+                    "Extra time added per route (h)": 0.0,
+                    "Allocated (kg)": round(base_fefo["Allocated_kg"], 2),
+                    "On-time & pre-expiry (kg)": round(base_fefo["On_time_pre_expiry_kg"], 2),
+                    "On-time fulfilment (%)": round(base_fefo["On_time_pre_expiry_fulfilment_pct"], 2),
+                    "Unmet demand (kg)": round(base_fefo["Unmet_demand_kg"], 2),
+                    "Transport cost (INR)": round(base_fefo["Transport_cost_INR"], 2),
+                    "Audit failures": int((results["fefo"]["audit"]["Status"] != "PASS").sum()),
+                },
+                {
+                    "Plan / scenario": "FreshRoute (original travel time)",
+                    "Travel-time increase (%)": 0,
+                    "Extra time added per route (h)": 0.0,
+                    "Allocated (kg)": round(base_fresh["Allocated_kg"], 2),
+                    "On-time & pre-expiry (kg)": round(base_fresh["On_time_pre_expiry_kg"], 2),
+                    "On-time fulfilment (%)": round(base_fresh["On_time_pre_expiry_fulfilment_pct"], 2),
+                    "Unmet demand (kg)": round(base_fresh["Unmet_demand_kg"], 2),
+                    "Transport cost (INR)": round(base_fresh["Transport_cost_INR"], 2),
+                    "Audit failures": int((results["fresh"]["audit"]["Status"] != "PASS").sum()),
+                },
+                {
+                    "Plan / scenario": f"FreshRoute (+{max_increase_pct}% travel time)",
+                    "Travel-time increase (%)": max_increase_pct,
+                    "Extra time added per route (h)": round(extra_hours, 2),
+                    "Allocated (kg)": round(met_u["Allocated_kg"], 2),
+                    "On-time & pre-expiry (kg)": round(met_u["On_time_pre_expiry_kg"], 2),
+                    "On-time fulfilment (%)": round(met_u["On_time_pre_expiry_fulfilment_pct"], 2),
+                    "Unmet demand (kg)": round(met_u["Unmet_demand_kg"], 2),
+                    "Transport cost (INR)": round(met_u["Transport_cost_INR"], 2),
+                    "Audit failures": int((aud_u["Status"] != "PASS").sum()),
+                },
+            ]
+            scenario_df = pd.DataFrame(rows)
+            st.session_state["travel_uncertainty_results"] = scenario_df
+        scenario_df = st.session_state.get("travel_uncertainty_results")
+        if isinstance(scenario_df, pd.DataFrame) and not scenario_df.empty:
+            st.markdown("#### Scenario comparison")
+            show_table(scenario_df, height=260)
+            chart_df = scenario_df.copy()
+            chart_metric = st.selectbox(
+                "Metric to visualise", ["On-time fulfilment (%)", "On-time & pre-expiry (kg)", "Unmet demand (kg)", "Transport cost (INR)"],
+                key="travel_uncertainty_chart_metric"
+            )
+            st.plotly_chart(
+                px.bar(chart_df, x="Plan / scenario", y=chart_metric,
+                       title=f"Impact of travel-time uncertainty on {chart_metric}"),
+                use_container_width=True
+            )
+            st.download_button(
+                "Download Travel Time Sensitivity Results",
+                scenario_df.to_csv(index=False).encode("utf-8-sig"),
+                "travel_time_uncertainty_analysis.csv", "text/csv", key="travel_uncertainty_download"
+            )
+            st.caption("Interpretation: compare changes across scenarios. These are deterministic what-if runs using a uniform delay assumption; they are not measured delays or a statistical confidence interval.")
+        else:
+            st.info("Choose a maximum increase and click **Run Travel Time Sensitivity Analysis** to generate the comparison.")
+
 elif page == "Performance & Discounts":
     st.subheader("KPI comparison & claim integrity")
     results=st.session_state.get("freshroute_results")
